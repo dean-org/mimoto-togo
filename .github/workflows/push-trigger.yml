@@ -3,10 +3,8 @@ name: Maven Package upon a push
 on:
   release:
     types: [published]
-
   pull_request:
     types: [opened, reopened, synchronize]
-
   workflow_dispatch:
     inputs:
       message:
@@ -14,7 +12,6 @@ on:
         required: false
         default: 'Triggered for Updates'
         type: string
-
   push:
     branches:
       - '!release-branch'
@@ -27,19 +24,12 @@ on:
       - inji*-*
       - vcv
 
-
 jobs:
-
-  # ============================================================
-  # Build Mimoto
-  # ============================================================
   build-mimoto:
     uses: mosip/kattu/.github/workflows/maven-build.yml@master-java21
-
     with:
-      SERVICE_LOCATION: ''
+      SERVICE_LOCATION: ./
       BUILD_ARTIFACT: mimoto
-
     secrets:
       OSSRH_USER: ${{ secrets.OSSRH_USER }}
       OSSRH_SECRET: ${{ secrets.OSSRH_SECRET }}
@@ -47,340 +37,86 @@ jobs:
       GPG_SECRET: ${{ secrets.GPG_SECRET }}
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_INJI_TEAM }}
 
-
-  # ============================================================
-  # Recreate Mimoto artifact in Kattu expected structure
-  # ============================================================
-  recreate-mimoto:
+  ## Recreate zips to provide support for docker unzip operation
+  recreate-zips:
     needs: build-mimoto
-
     runs-on: ubuntu-latest
-
+    env:
+      BUILD_ARTIFACT: mimoto
+      NEW_BUILD_ARTIFACT: mimoto-recreated
+      SERVICE_LOCATION: mimoto
     steps:
-
-      - name: Checkout
-        uses: actions/checkout@v4
-
-
-      - name: Download Mimoto Maven artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v3
+      - uses: actions/download-artifact@v4
+        if: ${{ ( env.BUILD_ARTIFACT != 'false' ) }}
         with:
-          name: mimoto
-          path: ./mimoto-artifact
-
-
-      - name: Inspect downloaded artifact
+          name: ${{ env.BUILD_ARTIFACT }}
+          path: ../
+      - name: recreate zip
         run: |
-          echo "========================================"
-          echo "Downloaded artifact"
-          echo "========================================"
+          cd ../
+          
+          echo "LS ./"
+          ls .
+          echo "unzip command"
+          unzip -uj "${{ env.BUILD_ARTIFACT }}.zip" "target/*" -d "${{ env.SERVICE_LOCATION }}/target/"
+          
+          echo "find command"
+          cd ${{ env.SERVICE_LOCATION }}
+          find ../${{ env.SERVICE_LOCATION }} -path '*/target/*' -name '*.jar'  -type f  -executable -exec zip ${{ env.NEW_BUILD_ARTIFACT }}.zip {} +
 
-          find ./mimoto-artifact -type f -print
-
-          echo ""
-          echo "ZIP contents:"
-          unzip -l ./mimoto-artifact/mimoto.zip || true
-
-
-      - name: Extract Maven artifact
-        run: |
-          mkdir -p ./mimoto-extracted
-
-          unzip -q ./mimoto-artifact/mimoto.zip \
-            -d ./mimoto-extracted
-
-          echo "========================================"
-          echo "Extracted files"
-          echo "========================================"
-
-          find ./mimoto-extracted -type f -print
-
-
-      - name: Locate Mimoto JAR
-        run: |
-          mkdir -p ./mimoto-recreated/target
-
-          echo "========================================"
-          echo "Searching for JAR files"
-          echo "========================================"
-
-          find ./mimoto-extracted \
-            -type f \
-            -name "*.jar" \
-            -print
-
-          JAR_FILE=$(find ./mimoto-extracted \
-            -type f \
-            -name "*.jar" \
-            | head -n 1)
-
-          if [ -z "$JAR_FILE" ]; then
-            echo "ERROR: No JAR file found"
-            exit 1
-          fi
-
-          echo "Using JAR:"
-          echo "$JAR_FILE"
-
-          cp "$JAR_FILE" ./mimoto-recreated/target/
-
-
-      - name: Verify recreated structure
-        run: |
-          echo "========================================"
-          echo "Final Docker artifact structure"
-          echo "========================================"
-
-          find ./mimoto-recreated -type f -print
-
-          echo ""
-          echo "Creating ZIP..."
-
-          cd ./mimoto-recreated
-
-          zip -r ../mimoto-recreated.zip target
-
-          cd ..
-
-          echo ""
-          echo "========================================"
-          echo "Final ZIP contents"
-          echo "========================================"
-
-          unzip -l mimoto-recreated.zip
-
-
-      - name: Upload recreated artifact
+      - name: Upload the springboot jars
         uses: actions/upload-artifact@v4
         with:
-          name: mimoto-recreated
-          path: mimoto-recreated.zip
+          name: ${{ env.NEW_BUILD_ARTIFACT }}
+          path: ${{ env.NEW_BUILD_ARTIFACT }}.zip
 
+  sonar_analysis:
+    needs: build-mimoto
+    if: "${{ github.event_name != 'pull_request' }}"
+    uses: mosip/kattu/.github/workflows/maven-sonar-analysis.yml@dsd9685
+    with:
+      SERVICE_LOCATION: ./
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      ORG_KEY: ${{ secrets.ORG_KEY }}
+      OSSRH_USER: ${{ secrets.OSSRH_USER }}
+      OSSRH_SECRET: ${{ secrets.OSSRH_SECRET }}
+      OSSRH_TOKEN: ${{ secrets.OSSRH_TOKEN }}
+      GPG_SECRET: ${{ secrets.GPG_SECRET }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_INJI_TEAM }}
 
-  # ============================================================
-  # Build Mimoto Docker image
-  # ============================================================
   build-dockers:
-    needs: recreate-mimoto
-
+    needs: recreate-zips
     strategy:
-      fail-fast: false
-
       matrix:
         include:
-          - SERVICE_LOCATION: './'
+          - SERVICE_LOCATION: '../mimoto'
             SERVICE_NAME: 'mimoto'
             BUILD_ARTIFACT: 'mimoto-recreated'
             SQUASH_LAYERS: '8'
-
-    name: ${{ matrix.SERVICE_NAME }}
-
+      fail-fast: false
     uses: mosip/kattu/.github/workflows/docker-build.yml@master-java21
-
+    name: ${{ matrix.SERVICE_NAME }}
     with:
       SERVICE_LOCATION: ${{ matrix.SERVICE_LOCATION }}
       SERVICE_NAME: ${{ matrix.SERVICE_NAME }}
       BUILD_ARTIFACT: ${{ matrix.BUILD_ARTIFACT }}
       SQUASH_LAYERS: ${{ matrix.SQUASH_LAYERS }}
-
     secrets:
       DEV_NAMESPACE_DOCKER_HUB: ${{ secrets.DEV_NAMESPACE_DOCKER_HUB }}
       ACTOR_DOCKER_HUB: ${{ secrets.ACTOR_DOCKER_HUB }}
       RELEASE_DOCKER_HUB: ${{ secrets.RELEASE_DOCKER_HUB }}
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_INJI_TEAM }}
 
-
-  # ============================================================
-  # Build API Test Maven artifact
-  # ============================================================
   build-maven-apitest-mimoto:
     uses: mosip/kattu/.github/workflows/maven-build.yml@master-java21
-
     with:
       SERVICE_LOCATION: ./api-test
       BUILD_ARTIFACT: apitest-mimoto
-
     secrets:
       OSSRH_USER: ${{ secrets.OSSRH_USER }}
       OSSRH_SECRET: ${{ secrets.OSSRH_SECRET }}
       OSSRH_TOKEN: ${{ secrets.OSSRH_TOKEN }}
       GPG_SECRET: ${{ secrets.GPG_SECRET }}
-      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_INJI_TEAM }}
-
-
-  # ============================================================
-  # Build API Test locally
-  # ============================================================
-  build-apitest-mimoto-local:
-    needs: build-maven-apitest-mimoto
-
-    runs-on: ubuntu-latest
-
-    env:
-      NAMESPACE: ${{ secrets.DEV_NAMESPACE_DOCKER_HUB }}
-      SERVICE_NAME: apitest-mimoto
-      SERVICE_LOCATION: api-test
-      BUILD_ARTIFACT: apitest-mimoto-local
-
-    steps:
-
-      - name: Checkout
-        uses: actions/checkout@v4
-
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v3
-        with:
-          distribution: temurin
-          java-version: '21'
-          server-id: ossrh
-          settings-path: ${{ github.workspace }}
-
-
-      - name: Setup Maven settings
-        run: |
-          cat > "$GITHUB_WORKSPACE/settings.xml" <<'EOF'
-          <settings>
-            <servers>
-              <server>
-                <id>ossrh</id>
-                <username>${{ secrets.OSSRH_USER }}</username>
-                <password>${{ secrets.OSSRH_SECRET }}</password>
-              </server>
-            </servers>
-
-            <profiles>
-
-              <profile>
-                <id>ossrh</id>
-                <activation>
-                  <activeByDefault>true</activeByDefault>
-                </activation>
-                <properties>
-                  <gpg.executable>gpg2</gpg.executable>
-                  <gpg.passphrase>${{ secrets.GPG_SECRET }}</gpg.passphrase>
-                </properties>
-              </profile>
-
-              <profile>
-                <id>allow-snapshots</id>
-                <activation>
-                  <activeByDefault>true</activeByDefault>
-                </activation>
-
-                <repositories>
-
-                  <repository>
-                    <id>snapshots-repo</id>
-                    <url>https://oss.sonatype.org/content/repositories/snapshots</url>
-                    <releases>
-                      <enabled>false</enabled>
-                    </releases>
-                    <snapshots>
-                      <enabled>true</enabled>
-                    </snapshots>
-                  </repository>
-
-                  <repository>
-                    <id>releases-repo</id>
-                    <url>https://oss.sonatype.org/service/local/staging/deploy/maven2</url>
-                    <releases>
-                      <enabled>true</enabled>
-                    </releases>
-                    <snapshots>
-                      <enabled>false</enabled>
-                    </snapshots>
-                  </repository>
-
-                </repositories>
-              </profile>
-
-              <profile>
-                <id>sonar</id>
-                <properties>
-                  <sonar.sources>.</sonar.sources>
-                  <sonar.host.url>https://sonarcloud.io</sonar.host.url>
-                </properties>
-                <activation>
-                  <activeByDefault>false</activeByDefault>
-                </activation>
-              </profile>
-
-            </profiles>
-          </settings>
-          EOF
-
-
-      - name: Build API tests
-        run: |
-          cd "${SERVICE_LOCATION}"
-          mvn clean package -s "$GITHUB_WORKSPACE/settings.xml"
-
-
-      - name: Copy configuration files
-        run: |
-          cp -r "${SERVICE_LOCATION}/target/classes/config" \
-                "${SERVICE_LOCATION}/target/config"
-
-          cp -r "${SERVICE_LOCATION}/testNgXmlFiles" \
-                "${SERVICE_LOCATION}/target/testNgXmlFiles"
-
-
-      - name: Create API test artifact
-        if: ${{ !contains(github.ref, 'master') }}
-        run: |
-          cd "${SERVICE_LOCATION}"
-
-          zip -r "../${BUILD_ARTIFACT}.zip" target
-
-
-      - name: Upload API test artifact
-        if: ${{ !contains(github.ref, 'master') }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.BUILD_ARTIFACT }}
-          path: ${{ env.BUILD_ARTIFACT }}.zip
-
-
-      - name: Slack notification
-        if: failure()
-        uses: 8398a7/action-slack@v3
-        with:
-          status: ${{ job.status }}
-          fields: repo,message,author,commit,workflow,job
-
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_INJI_TEAM }}
-
-
-  # ============================================================
-  # Build API Test Docker
-  # ============================================================
-  build-dockers_apitest_mimoto:
-    needs: build-apitest-mimoto-local
-
-    strategy:
-      fail-fast: false
-
-      matrix:
-        include:
-          - SERVICE_LOCATION: 'api-test'
-            SERVICE_NAME: 'apitest-mimoto'
-            BUILD_ARTIFACT: 'apitest-mimoto-local'
-            ONLY_DOCKER: true
-
-    name: ${{ matrix.SERVICE_NAME }}
-
-    uses: mosip/kattu/.github/workflows/docker-build.yml@master-java21
-
-    with:
-      SERVICE_LOCATION: ${{ matrix.SERVICE_LOCATION }}
-      SERVICE_NAME: ${{ matrix.SERVICE_NAME }}
-      BUILD_ARTIFACT: ${{ matrix.BUILD_ARTIFACT }}
-      ONLY_DOCKER: ${{ matrix.ONLY_DOCKER }}
-
-    secrets:
-      DEV_NAMESPACE_DOCKER_HUB: ${{ secrets.DEV_NAMESPACE_DOCKER_HUB }}
-      ACTOR_DOCKER_HUB: ${{ secrets.ACTOR_DOCKER_HUB }}
-      RELEASE_DOCKER_HUB: ${{ secrets.RELEASE_DOCKER_HUB }}
-      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_INJI_TEAM }}
+      SLACK_WEBHOOK_URL: ${{
