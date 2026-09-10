@@ -94,7 +94,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - SERVICE_LOCATION: '../mimoto'
+          - SERVICE_LOCATION: '../mimoto-togo'
             SERVICE_NAME: 'mimoto'
             BUILD_ARTIFACT: 'mimoto-recreated'
             SQUASH_LAYERS: '8'
