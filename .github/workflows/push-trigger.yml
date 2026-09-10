@@ -54,23 +54,25 @@ jobs:
           path: ../
       - name: recreate zip
         run: |
+          set -e
           cd ../
-          
+
           echo "LS ./"
           ls .
           echo "unzip command"
           mkdir -p "${{ env.SERVICE_LOCATION }}/target"
           unzip -uj "${{ env.BUILD_ARTIFACT }}.zip" "target/*" -d "${{ env.SERVICE_LOCATION }}/target/"
-          
+
           echo "find command"
           cd ${{ env.SERVICE_LOCATION }}
-          find ../${{ env.SERVICE_LOCATION }} -path '*/target/*' -name '*.jar'  -type f  -executable -exec zip ${{ env.NEW_BUILD_ARTIFACT }}.zip {} +
+          find . -path '*/target/*' -name '*.jar' -type f -executable -exec zip "$GITHUB_WORKSPACE/${{ env.NEW_BUILD_ARTIFACT }}.zip" {} +
 
       - name: Upload the springboot jars
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.NEW_BUILD_ARTIFACT }}
           path: ${{ env.NEW_BUILD_ARTIFACT }}.zip
+          if-no-files-found: error
 
   sonar_analysis:
     needs: build-mimoto
