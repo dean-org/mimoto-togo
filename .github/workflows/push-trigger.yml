@@ -64,8 +64,12 @@ jobs:
           unzip -uj "${{ env.BUILD_ARTIFACT }}.zip" "target/*" -d "${{ env.SERVICE_LOCATION }}/target/"
 
           echo "find command"
-          cd ${{ env.SERVICE_LOCATION }}
-          find . -path '*/target/*' -name '*.jar' -type f -executable -exec zip "$GITHUB_WORKSPACE/${{ env.NEW_BUILD_ARTIFACT }}.zip" {} +
+          # Build the zip from a sibling directory so entry names carry the
+          # literal "../<SERVICE_LOCATION>/target/..." prefix that the
+          # downstream docker-build.yml unzip step matches against.
+          mkdir -p ziptmp
+          cd ziptmp
+          find "../${{ env.SERVICE_LOCATION }}" -path '*/target/*' -name '*.jar' -type f -executable -exec zip "$GITHUB_WORKSPACE/${{ env.NEW_BUILD_ARTIFACT }}.zip" {} +
 
       - name: Upload the springboot jars
         uses: actions/upload-artifact@v4
