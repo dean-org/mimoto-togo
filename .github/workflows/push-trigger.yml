@@ -27,10 +27,11 @@ on:
       - inji*-*
       - vcv
 
+
 jobs:
 
   # ============================================================
-  # Build Mimoto Maven artifact
+  # Build Mimoto
   # ============================================================
   build-mimoto:
     uses: mosip/kattu/.github/workflows/maven-build.yml@master-java21
@@ -48,18 +49,128 @@ jobs:
 
 
   # ============================================================
+  # Recreate Mimoto artifact in Kattu expected structure
+  # ============================================================
+  recreate-mimoto:
+    needs: build-mimoto
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+
+      - name: Download Mimoto Maven artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: mimoto
+          path: ./mimoto-artifact
+
+
+      - name: Inspect downloaded artifact
+        run: |
+          echo "========================================"
+          echo "Downloaded artifact"
+          echo "========================================"
+
+          find ./mimoto-artifact -type f -print
+
+          echo ""
+          echo "ZIP contents:"
+          unzip -l ./mimoto-artifact/mimoto.zip || true
+
+
+      - name: Extract Maven artifact
+        run: |
+          mkdir -p ./mimoto-extracted
+
+          unzip -q ./mimoto-artifact/mimoto.zip \
+            -d ./mimoto-extracted
+
+          echo "========================================"
+          echo "Extracted files"
+          echo "========================================"
+
+          find ./mimoto-extracted -type f -print
+
+
+      - name: Locate Mimoto JAR
+        run: |
+          mkdir -p ./mimoto-recreated/target
+
+          echo "========================================"
+          echo "Searching for JAR files"
+          echo "========================================"
+
+          find ./mimoto-extracted \
+            -type f \
+            -name "*.jar" \
+            -print
+
+          JAR_FILE=$(find ./mimoto-extracted \
+            -type f \
+            -name "*.jar" \
+            | head -n 1)
+
+          if [ -z "$JAR_FILE" ]; then
+            echo "ERROR: No JAR file found"
+            exit 1
+          fi
+
+          echo "Using JAR:"
+          echo "$JAR_FILE"
+
+          cp "$JAR_FILE" ./mimoto-recreated/target/
+
+
+      - name: Verify recreated structure
+        run: |
+          echo "========================================"
+          echo "Final Docker artifact structure"
+          echo "========================================"
+
+          find ./mimoto-recreated -type f -print
+
+          echo ""
+          echo "Creating ZIP..."
+
+          cd ./mimoto-recreated
+
+          zip -r ../mimoto-recreated.zip target
+
+          cd ..
+
+          echo ""
+          echo "========================================"
+          echo "Final ZIP contents"
+          echo "========================================"
+
+          unzip -l mimoto-recreated.zip
+
+
+      - name: Upload recreated artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mimoto-recreated
+          path: mimoto-recreated.zip
+
+
+  # ============================================================
   # Build Mimoto Docker image
   # ============================================================
   build-dockers:
-    needs: build-mimoto
+    needs: recreate-mimoto
 
     strategy:
       fail-fast: false
+
       matrix:
         include:
           - SERVICE_LOCATION: './'
             SERVICE_NAME: 'mimoto'
-            BUILD_ARTIFACT: 'mimoto'
+            BUILD_ARTIFACT: 'mimoto-recreated'
             SQUASH_LAYERS: '8'
 
     name: ${{ matrix.SERVICE_NAME }}
@@ -98,7 +209,7 @@ jobs:
 
 
   # ============================================================
-  # Prepare API Test Docker artifact
+  # Build API Test locally
   # ============================================================
   build-apitest-mimoto-local:
     needs: build-maven-apitest-mimoto
@@ -113,8 +224,8 @@ jobs:
 
     steps:
 
-      - name: Checkout Code
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
 
       - name: Set up JDK 21
@@ -145,7 +256,6 @@ jobs:
                 <activation>
                   <activeByDefault>true</activeByDefault>
                 </activation>
-
                 <properties>
                   <gpg.executable>gpg2</gpg.executable>
                   <gpg.passphrase>${{ secrets.GPG_SECRET }}</gpg.passphrase>
@@ -154,7 +264,6 @@ jobs:
 
               <profile>
                 <id>allow-snapshots</id>
-
                 <activation>
                   <activeByDefault>true</activeByDefault>
                 </activation>
@@ -163,9 +272,7 @@ jobs:
 
                   <repository>
                     <id>snapshots-repo</id>
-                    <url>
-                      https://oss.sonatype.org/content/repositories/snapshots
-                    </url>
+                    <url>https://oss.sonatype.org/content/repositories/snapshots</url>
                     <releases>
                       <enabled>false</enabled>
                     </releases>
@@ -176,9 +283,7 @@ jobs:
 
                   <repository>
                     <id>releases-repo</id>
-                    <url>
-                      https://oss.sonatype.org/service/local/staging/deploy/maven2
-                    </url>
+                    <url>https://oss.sonatype.org/service/local/staging/deploy/maven2</url>
                     <releases>
                       <enabled>true</enabled>
                     </releases>
@@ -192,12 +297,10 @@ jobs:
 
               <profile>
                 <id>sonar</id>
-
                 <properties>
                   <sonar.sources>.</sonar.sources>
                   <sonar.host.url>https://sonarcloud.io</sonar.host.url>
                 </properties>
-
                 <activation>
                   <activeByDefault>false</activeByDefault>
                 </activation>
@@ -228,13 +331,12 @@ jobs:
         run: |
           cd "${SERVICE_LOCATION}"
 
-          zip -r "../${BUILD_ARTIFACT}.zip" target testNgXmlFiles
+          zip -r "../${BUILD_ARTIFACT}.zip" target
 
 
       - name: Upload API test artifact
         if: ${{ !contains(github.ref, 'master') }}
         uses: actions/upload-artifact@v4
-
         with:
           name: ${{ env.BUILD_ARTIFACT }}
           path: ${{ env.BUILD_ARTIFACT }}.zip
@@ -243,7 +345,6 @@ jobs:
       - name: Slack notification
         if: failure()
         uses: 8398a7/action-slack@v3
-
         with:
           status: ${{ job.status }}
           fields: repo,message,author,commit,workflow,job
@@ -253,13 +354,14 @@ jobs:
 
 
   # ============================================================
-  # Build API Test Docker image
+  # Build API Test Docker
   # ============================================================
   build-dockers_apitest_mimoto:
     needs: build-apitest-mimoto-local
 
     strategy:
       fail-fast: false
+
       matrix:
         include:
           - SERVICE_LOCATION: 'api-test'
