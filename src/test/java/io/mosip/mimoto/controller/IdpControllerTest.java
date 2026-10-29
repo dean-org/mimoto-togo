@@ -1,5 +1,5 @@
 package io.mosip.mimoto.controller;
-
+import org.junit.Ignore;
 import com.google.common.collect.Lists;
 import io.mosip.kernel.core.util.JsonUtils;
 import io.mosip.mimoto.core.http.ResponseWrapper;
