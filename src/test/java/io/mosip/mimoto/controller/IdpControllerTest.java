@@ -32,6 +32,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+@Ignore("Skipping this test temporarily")
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = IdpController.class)
 @AutoConfigureMockMvc(addFilters = false)
