@@ -139,6 +139,7 @@ public class IdpController {
 
         if (publicKey instanceof Map) {
             // Already a JWK object: validate and convert to JwkDto.
+            log.info("wallet-binding publicKey is an object with members: {}", ((Map<?, ?>) publicKey).keySet());
             String jwkJson = objectMapper.writeValueAsString(publicKey);
             return toJwkDto(jwkJson);
         }
