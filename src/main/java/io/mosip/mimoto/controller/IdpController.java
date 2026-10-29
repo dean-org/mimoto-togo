@@ -10,6 +10,7 @@ import io.mosip.mimoto.dto.mimoto.*;
 import io.mosip.mimoto.exception.IdpException;
 import io.mosip.mimoto.exception.PlatformErrorMessages;
 import io.mosip.mimoto.service.IdpService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.mosip.mimoto.service.RestClientService;
 import io.mosip.mimoto.util.JoseUtil;
 import io.mosip.mimoto.util.RequestValidator;
@@ -27,7 +28,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.BindingResult;
 import org.springframework.web.bind.annotation.*;
-
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +40,9 @@ import java.util.Map;
 public class IdpController {
     private static final boolean USE_BEARER_TOKEN = true;
 
+    @Autowired
+    private ObjectMapper objectMapper;
+    
     @Autowired
     private RestClientService<Object> restClientService;
 
@@ -85,7 +90,8 @@ public class IdpController {
             WalletBindingInnerRequestDto innerRequestDto = new WalletBindingInnerRequestDto();
             innerRequestDto.setChallengeList(requestDTO.getRequest().getChallengeList());
             innerRequestDto.setIndividualId(requestDTO.getRequest().getIndividualId());
-            innerRequestDto.setPublicKey(JoseUtil.getJwkFromPublicKey(requestDTO.getRequest().getPublicKey()));
+            String publicKeyString = objectMapper.writeValueAsString(requestDTO.getRequest().getPublicKey());
+            innerRequestDto.setPublicKey(JoseUtil.getJwkFromPublicKey(publicKeyString));
             innerRequestDto.setAuthFactorType(requestDTO.getRequest().getAuthFactorType());
             innerRequestDto.setFormat(requestDTO.getRequest().getFormat());
 
