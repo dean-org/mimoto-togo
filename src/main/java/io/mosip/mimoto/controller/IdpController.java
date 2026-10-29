@@ -28,6 +28,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.validation.BindingResult;
 import org.springframework.web.bind.annotation.*;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.jwk.JWK;
 import jakarta.validation.Valid;
@@ -131,28 +132,39 @@ public class IdpController {
      * produced a string starting with '{' (0x7b) and failed with
      * "Illegal base64 character 7b".
      */
-    private Map<String, Object> resolvePublicKeyAsJwk(Object publicKey) throws Exception {
+    private JwkDto resolvePublicKeyAsJwk(Object publicKey) throws Exception {
         if (publicKey == null) {
             throw new IllegalArgumentException("publicKey is missing in the wallet-binding request");
         }
 
         if (publicKey instanceof Map) {
-            // Already a JWK object: validate and normalise.
+            // Already a JWK object: validate and convert to JwkDto.
             String jwkJson = objectMapper.writeValueAsString(publicKey);
-            return JWK.parse(jwkJson).toJSONObject();
+            return toJwkDto(jwkJson);
         }
 
         if (publicKey instanceof String) {
             String keyString = ((String) publicKey).trim();
             if (keyString.startsWith("{")) {
                 // JWK sent as a JSON string.
-                return JWK.parse(keyString).toJSONObject();
+                return toJwkDto(keyString);
             }
             // Plain base64-encoded public key.
             return JoseUtil.getJwkFromPublicKey(keyString);
         }
 
         throw new IllegalArgumentException("Unsupported publicKey format: " + publicKey.getClass().getName());
+    }
+
+    /**
+     * Validates the JSON as a real JWK (via Nimbus) and maps it onto JwkDto.
+     * Unknown JWK members are ignored so extra fields don't break deserialization.
+     */
+    private JwkDto toJwkDto(String jwkJson) throws Exception {
+        Map<String, Object> jwkMap = JWK.parse(jwkJson).toJSONObject();
+        return objectMapper.copy()
+                .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+                .convertValue(jwkMap, JwkDto.class);
     }
 
     @Operation(summary = SwaggerLiteralConstants.IDP_GET_TOKEN_SUMMARY, description = SwaggerLiteralConstants.IDP_GET_TOKEN_DESCRIPTION)
