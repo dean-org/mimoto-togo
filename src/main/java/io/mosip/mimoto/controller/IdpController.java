@@ -10,7 +10,6 @@ import io.mosip.mimoto.dto.mimoto.*;
 import io.mosip.mimoto.exception.IdpException;
 import io.mosip.mimoto.exception.PlatformErrorMessages;
 import io.mosip.mimoto.service.IdpService;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.mosip.mimoto.service.RestClientService;
 import io.mosip.mimoto.util.JoseUtil;
 import io.mosip.mimoto.util.RequestValidator;
@@ -30,6 +29,7 @@ import org.springframework.validation.BindingResult;
 import org.springframework.web.bind.annotation.*;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nimbusds.jose.jwk.JWK;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.Map;
@@ -81,6 +81,7 @@ public class IdpController {
 
     @Operation(summary = SwaggerLiteralConstants.IDP_WALLET_BINDING_SUMMARY, description = SwaggerLiteralConstants.IDP_WALLET_BINDING_DESCRIPTION)
     @PostMapping(path = "/wallet-binding", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    @SuppressWarnings("unchecked")
     public ResponseEntity<ResponseWrapper<WalletBindingResponseDto>> request(@RequestBody WalletBindingRequestDTO requestDTO)
             throws Exception {
 
@@ -90,8 +91,7 @@ public class IdpController {
             WalletBindingInnerRequestDto innerRequestDto = new WalletBindingInnerRequestDto();
             innerRequestDto.setChallengeList(requestDTO.getRequest().getChallengeList());
             innerRequestDto.setIndividualId(requestDTO.getRequest().getIndividualId());
-            String publicKeyString = objectMapper.writeValueAsString(requestDTO.getRequest().getPublicKey());
-            innerRequestDto.setPublicKey(JoseUtil.getJwkFromPublicKey(publicKeyString));
+            innerRequestDto.setPublicKey(resolvePublicKeyAsJwk(requestDTO.getRequest().getPublicKey()));
             innerRequestDto.setAuthFactorType(requestDTO.getRequest().getAuthFactorType());
             innerRequestDto.setFormat(requestDTO.getRequest().getFormat());
 
@@ -114,6 +114,45 @@ public class IdpController {
             responseWrapper.setErrors(errors);
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(responseWrapper);
         }
+    }
+
+    /**
+     * Normalises the incoming public key into a JWK map.
+     * <p>
+     * Supported input formats:
+     * <ul>
+     *   <li>A JWK object (e.g. {"kty":"RSA","n":"...","e":"AQAB"}) - validated and passed through.</li>
+     *   <li>A JWK serialized as a JSON string - parsed and validated.</li>
+     *   <li>A plain base64-encoded RSA public key string - converted to a JWK via JoseUtil.</li>
+     * </ul>
+     *
+     * Previously the key was always serialized with ObjectMapper and handed to
+     * JoseUtil.getJwkFromPublicKey, which expects plain base64. A JWK object therefore
+     * produced a string starting with '{' (0x7b) and failed with
+     * "Illegal base64 character 7b".
+     */
+    private Map<String, Object> resolvePublicKeyAsJwk(Object publicKey) throws Exception {
+        if (publicKey == null) {
+            throw new IllegalArgumentException("publicKey is missing in the wallet-binding request");
+        }
+
+        if (publicKey instanceof Map) {
+            // Already a JWK object: validate and normalise.
+            String jwkJson = objectMapper.writeValueAsString(publicKey);
+            return JWK.parse(jwkJson).toJSONObject();
+        }
+
+        if (publicKey instanceof String) {
+            String keyString = ((String) publicKey).trim();
+            if (keyString.startsWith("{")) {
+                // JWK sent as a JSON string.
+                return JWK.parse(keyString).toJSONObject();
+            }
+            // Plain base64-encoded public key.
+            return JoseUtil.getJwkFromPublicKey(keyString);
+        }
+
+        throw new IllegalArgumentException("Unsupported publicKey format: " + publicKey.getClass().getName());
     }
 
     @Operation(summary = SwaggerLiteralConstants.IDP_GET_TOKEN_SUMMARY, description = SwaggerLiteralConstants.IDP_GET_TOKEN_DESCRIPTION)
