@@ -27,14 +27,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.BindingResult;
 import org.springframework.web.bind.annotation.*;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.nimbusds.jose.jwk.JWK;
+
 import jakarta.validation.Valid;
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -44,9 +38,6 @@ import java.util.Map;
 public class IdpController {
     private static final boolean USE_BEARER_TOKEN = true;
 
-    @Autowired
-    private ObjectMapper objectMapper;
-    
     @Autowired
     private RestClientService<Object> restClientService;
 
@@ -85,7 +76,6 @@ public class IdpController {
 
     @Operation(summary = SwaggerLiteralConstants.IDP_WALLET_BINDING_SUMMARY, description = SwaggerLiteralConstants.IDP_WALLET_BINDING_DESCRIPTION)
     @PostMapping(path = "/wallet-binding", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    @SuppressWarnings("unchecked")
     public ResponseEntity<ResponseWrapper<WalletBindingResponseDto>> request(@RequestBody WalletBindingRequestDTO requestDTO)
             throws Exception {
 
@@ -95,7 +85,7 @@ public class IdpController {
             WalletBindingInnerRequestDto innerRequestDto = new WalletBindingInnerRequestDto();
             innerRequestDto.setChallengeList(requestDTO.getRequest().getChallengeList());
             innerRequestDto.setIndividualId(requestDTO.getRequest().getIndividualId());
-            innerRequestDto.setPublicKey(resolvePublicKeyAsJwk(requestDTO.getRequest().getPublicKey()));
+            innerRequestDto.setPublicKey(JoseUtil.getJwkFromPublicKey(requestDTO.getRequest().getPublicKey()));
             innerRequestDto.setAuthFactorType(requestDTO.getRequest().getAuthFactorType());
             innerRequestDto.setFormat(requestDTO.getRequest().getFormat());
 
@@ -118,132 +108,6 @@ public class IdpController {
             responseWrapper.setErrors(errors);
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(responseWrapper);
         }
-    }
-
-    /**
-     * Normalises the incoming public key into a JWK map.
-     * <p>
-     * Supported input formats:
-     * <ul>
-     *   <li>A JWK object (e.g. {"kty":"RSA","n":"...","e":"AQAB"}) - validated and passed through.</li>
-     *   <li>A JWK serialized as a JSON string - parsed and validated.</li>
-     *   <li>A plain base64-encoded RSA public key string - converted to a JWK via JoseUtil.</li>
-     * </ul>
-     *
-     * Previously the key was always serialized with ObjectMapper and handed to
-     * JoseUtil.getJwkFromPublicKey, which expects plain base64. A JWK object therefore
-     * produced a string starting with '{' (0x7b) and failed with
-     * "Illegal base64 character 7b".
-     */
-    private JwkDto resolvePublicKeyAsJwk(Object publicKey) throws Exception {
-        if (publicKey == null) {
-            throw new IllegalArgumentException("publicKey is missing in the wallet-binding request");
-        }
-
-        if (publicKey instanceof Map) {
-            return fromJwkMap((Map<?, ?>) publicKey);
-        }
-
-        if (publicKey instanceof String) {
-            String keyString = ((String) publicKey).trim();
-            if (keyString.startsWith("{")) {
-                // JWK sent as a JSON string.
-                return fromJwkMap(objectMapper.readValue(keyString, Map.class));
-            }
-            // Plain base64-encoded public key.
-            return JoseUtil.getJwkFromPublicKey(keyString);
-        }
-
-        throw new IllegalArgumentException("Unsupported publicKey format: " + publicKey.getClass().getName());
-    }
-
-    /**
-     * Converts a key object into JwkDto, tolerating common client variations:
-     * standard JWK, JWK wrapped under "jwk"/"publicKey"/"key", or an RSA JWK missing "kty".
-     */
-    private JwkDto fromJwkMap(Map<?, ?> raw) throws Exception {
-        Map<String, Object> map = new LinkedHashMap<>();
-        raw.forEach((k, v) -> map.put(String.valueOf(k), v));
-        // Log only the member names (not values) to help diagnose malformed keys.
-        log.info("wallet-binding publicKey is an object with members: {}", map.keySet());
-
-        // 0. Node.js Buffer serialized as JSON: {"type":"Buffer","data":[48,130,...]}
-        if ("Buffer".equals(map.get("type")) && map.get("data") instanceof List) {
-            return fromKeyBytes(bufferToBytes((List<?>) map.get("data")));
-        }
-
-        // 1. Standard JWK
-        if (map.get("kty") != null) {
-            return toJwkDto(map);
-        }
-
-        // 2. JWK wrapped inside another member
-        for (String wrapper : new String[]{"jwk", "publicKey", "key"}) {
-            Object inner = map.get(wrapper);
-            if (inner instanceof Map || inner instanceof String) {
-                return resolvePublicKeyAsJwk(inner);
-            }
-        }
-
-        // 3. RSA JWK that is missing "kty"
-        if (map.containsKey("n") && map.containsKey("e")) {
-            map.put("kty", "RSA");
-            return toJwkDto(map);
-        }
-
-        throw new IllegalArgumentException(
-                "Unsupported publicKey object, expected a JWK. Received members: " + map.keySet());
-    }
-
-    private byte[] bufferToBytes(List<?> data) {
-        byte[] bytes = new byte[data.size()];
-        for (int i = 0; i < bytes.length; i++) {
-            Object o = data.get(i);
-            if (!(o instanceof Number)) {
-                throw new IllegalArgumentException("publicKey Buffer data must be an array of byte values");
-            }
-            bytes[i] = (byte) ((Number) o).intValue();
-        }
-        return bytes;
-    }
-
-    /**
-     * Key bytes are either the raw DER (X.509) public key, or the ASCII text of a PEM/base64 key.
-     * Either way, normalise to a plain base64 string and reuse JoseUtil.getJwkFromPublicKey.
-     */
-    private JwkDto fromKeyBytes(byte[] bytes) throws Exception {
-        String base64;
-        if (isPrintableAscii(bytes)) {
-            String text = new String(bytes, StandardCharsets.UTF_8).trim();
-            if (text.startsWith("{")) {
-                return fromJwkMap(objectMapper.readValue(text, Map.class));
-            }
-            base64 = text.replaceAll("-----(BEGIN|END)[A-Z ]*-----", "").replaceAll("\\s", "");
-        } else {
-            base64 = Base64.getEncoder().encodeToString(bytes);
-        }
-        return JoseUtil.getJwkFromPublicKey(base64);
-    }
-
-    private boolean isPrintableAscii(byte[] bytes) {
-        for (byte b : bytes) {
-            boolean printable = (b >= 0x20 && b <= 0x7e) || b == '\n' || b == '\r' || b == '\t';
-            if (!printable) {
-                return false;
-            }
-        }
-        return bytes.length > 0;
-    }
-
-    /**
-     * Validates the map as a real JWK (via Nimbus) and maps it onto JwkDto.
-     * Unknown JWK members are ignored so extra fields don't break deserialization.
-     */
-    private JwkDto toJwkDto(Map<String, Object> jwkMap) throws Exception {
-        Map<String, Object> validated = JWK.parse(jwkMap).toJSONObject();
-        return objectMapper.copy()
-                .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
-                .convertValue(validated, JwkDto.class);
     }
 
     @Operation(summary = SwaggerLiteralConstants.IDP_GET_TOKEN_SUMMARY, description = SwaggerLiteralConstants.IDP_GET_TOKEN_DESCRIPTION)
